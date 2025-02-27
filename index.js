@@ -1,23 +1,32 @@
 const express = require('express');
-const Joi = require('joi');  // For validation
-const dotenv = require('dotenv'); // For environment variables
+const Joi = require('joi');
+const dotenv = require('dotenv');
+const mongoose = require('mongoose');
 const app = express();
 const port = process.env.PORT || 3000;
 
 // Load environment variables from .env file
 dotenv.config();
 
+// Connect to MongoDB
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => console.log('Connected to MongoDB'))
+  .catch(err => console.error('MongoDB connection error:', err));
+
 // Middleware to parse JSON requests
 app.use(express.json());
 
-// In-memory "database" for storing users
-let users = [
-  { id: 1, name: 'Alice', email: 'alice@example.com' },
-  { id: 2, name: 'Bob', email: 'bob@example.com' }
-];
+// Define a user schema with mongoose
+const userSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true }
+});
+
+// Create a User model based on the schema
+const User = mongoose.model('User', userSchema);
 
 // Validation schema for user data
-const userSchema = Joi.object({
+const userValidationSchema = Joi.object({
   name: Joi.string().min(3).required(),
   email: Joi.string().email().required()
 });
@@ -34,68 +43,85 @@ app.get('/', (req, res) => {
 });
 
 // GET all users
-app.get('/users', (req, res) => {
-  res.json(users);
+app.get('/users', async (req, res) => {
+  try {
+    const users = await User.find();
+    res.json(users);
+  } catch (err) {
+    res.status(500).send('Error retrieving users');
+  }
 });
 
 // GET a single user by ID
-app.get('/users/:id', (req, res) => {
-  const user = users.find(u => u.id === parseInt(req.params.id));
-  if (!user) {
-    return res.status(404).send('User not found');
+app.get('/users/:id', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).send('User not found');
+    }
+    res.json(user);
+  } catch (err) {
+    res.status(500).send('Error retrieving the user');
   }
-  res.json(user);
 });
 
 // POST request to create a new user
-app.post('/users', (req, res) => {
-  const { error } = userSchema.validate(req.body);
+app.post('/users', async (req, res) => {
+  const { error } = userValidationSchema.validate(req.body);
   if (error) {
     return res.status(400).send(error.details[0].message);
   }
 
-  const newUser = {
-    id: users.length + 1,
+  const newUser = new User({
     name: req.body.name,
     email: req.body.email
-  };
+  });
 
-  users.push(newUser);
-  res.status(201).json(newUser);
+  try {
+    await newUser.save();
+    res.status(201).json(newUser);
+  } catch (err) {
+    res.status(500).send('Error saving the user');
+  }
 });
 
 // PUT request to update an existing user
-app.put('/users/:id', (req, res) => {
-  const user = users.find(u => u.id === parseInt(req.params.id));
-  if (!user) {
-    return res.status(404).send('User not found');
-  }
-
-  // Validate the incoming request body
-  const { error } = userSchema.validate(req.body);
+app.put('/users/:id', async (req, res) => {
+  const { error } = userValidationSchema.validate(req.body);
   if (error) {
     return res.status(400).send(error.details[0].message);
   }
 
-  user.name = req.body.name;
-  user.email = req.body.email;
-  res.json(user);
+  try {
+    const user = await User.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!user) {
+      return res.status(404).send('User not found');
+    }
+    res.json(user);
+  } catch (err) {
+    res.status(500).send('Error updating the user');
+  }
 });
 
 // DELETE request to remove a user
-app.delete('/users/:id', (req, res) => {
-  const userIndex = users.findIndex(u => u.id === parseInt(req.params.id));
-  if (userIndex === -1) {
-    return res.status(404).send('User not found');
+app.delete('/users/:id', async (req, res) => {
+  try {
+    const user = await User.findByIdAndDelete(req.params.id);
+    if (!user) {
+      return res.status(404).send('User not found');
+    }
+    res.status(204).send();  // No content to return
+  } catch (err) {
+    res.status(500).send('Error deleting the user');
   }
-
-  users.splice(userIndex, 1);
-  res.status(204).send();  // No content to return
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error(err);
+  if (err.name === 'ValidationError') {
+    return res.status(400).send('Invalid input data');
+  }
   res.status(500).send('Something went wrong!');
 });
 
