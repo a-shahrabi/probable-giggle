@@ -2,16 +2,36 @@ const express = require('express');
 const Joi = require('joi');
 const dotenv = require('dotenv');
 const mongoose = require('mongoose');
+const winston = require('winston');
 const app = express();
 const port = process.env.PORT || 3000;
 
 // Load environment variables from .env file
 dotenv.config();
 
+// Set up winston logger
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.simple()
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'logfile.log' })
+  ]
+});
+
+// Middleware to log every request
+app.use((req, res, next) => {
+  logger.info(`Request: ${req.method} ${req.url} - IP: ${req.ip}`);
+  next();
+});
+
 // Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log('Connected to MongoDB'))
-  .catch(err => console.error('MongoDB connection error:', err));
+  .catch(err => logger.error('MongoDB connection error:', err));
 
 // Middleware to parse JSON requests
 app.use(express.json());
@@ -33,98 +53,28 @@ const userValidationSchema = Joi.object({
 
 // Middleware to log requests
 app.use((req, res, next) => {
-  console.log(`${req.method} request to ${req.url}`);
+  logger.info(`${req.method} request to ${req.url}`);
   next();
 });
+
+// Versioned API route (future-proofing)
+app.use('/api/v1', require('./routes/v1'));  // New routes folder (v1) for API versioning
 
 // A simple endpoint
 app.get('/', (req, res) => {
   res.send('Hello, this is my sophisticated API!');
 });
 
-// GET all users
-app.get('/users', async (req, res) => {
-  try {
-    const users = await User.find();
-    res.json(users);
-  } catch (err) {
-    res.status(500).send('Error retrieving users');
-  }
-});
-
-// GET a single user by ID
-app.get('/users/:id', async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id);
-    if (!user) {
-      return res.status(404).send('User not found');
-    }
-    res.json(user);
-  } catch (err) {
-    res.status(500).send('Error retrieving the user');
-  }
-});
-
-// POST request to create a new user
-app.post('/users', async (req, res) => {
-  const { error } = userValidationSchema.validate(req.body);
-  if (error) {
-    return res.status(400).send(error.details[0].message);
-  }
-
-  const newUser = new User({
-    name: req.body.name,
-    email: req.body.email
-  });
-
-  try {
-    await newUser.save();
-    res.status(201).json(newUser);
-  } catch (err) {
-    res.status(500).send('Error saving the user');
-  }
-});
-
-// PUT request to update an existing user
-app.put('/users/:id', async (req, res) => {
-  const { error } = userValidationSchema.validate(req.body);
-  if (error) {
-    return res.status(400).send(error.details[0].message);
-  }
-
-  try {
-    const user = await User.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    if (!user) {
-      return res.status(404).send('User not found');
-    }
-    res.json(user);
-  } catch (err) {
-    res.status(500).send('Error updating the user');
-  }
-});
-
-// DELETE request to remove a user
-app.delete('/users/:id', async (req, res) => {
-  try {
-    const user = await User.findByIdAndDelete(req.params.id);
-    if (!user) {
-      return res.status(404).send('User not found');
-    }
-    res.status(204).send();  // No content to return
-  } catch (err) {
-    res.status(500).send('Error deleting the user');
-  }
-});
-
-// Error handling middleware
+// Error handling middleware (catch all)
 app.use((err, req, res, next) => {
-  console.error(err);
+  logger.error(err.stack);
   if (err.name === 'ValidationError') {
     return res.status(400).send('Invalid input data');
   }
   res.status(500).send('Something went wrong!');
 });
 
+// Listen on port
 app.listen(port, () => {
-  console.log(`API is running on http://localhost:${port}`);
+  logger.info(`API is running on http://localhost:${port}`);
 });
